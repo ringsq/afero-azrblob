@@ -413,7 +413,27 @@ func TestFileCreate(t *testing.T) {
 		t.Fatal("Should not be able to access file")
 	}
 }
+func TestRemove(t *testing.T) {
+	fs := GetFs(t)
 
+	file, err := fs.Create("file1")
+	if err != nil {
+		t.Fatal("Could not create file1:", err)
+	}
+
+	if _, err := file.WriteString("Hello world!"); err != nil {
+		t.Fatal("Could not write file:", err)
+	}
+
+	if err := file.Close(); err != nil {
+		t.Fatal("Could not close file1 err:", err)
+	}
+
+	err = fs.Remove("file1")
+	if err != nil {
+		t.Fatal("Could not remove file1:", err)
+	}
+}
 func TestRemoveAll(t *testing.T) {
 	fs := GetFs(t)
 
@@ -426,7 +446,7 @@ func TestRemoveAll(t *testing.T) {
 	}
 	file, err := fs.Create("/dir1/file1")
 	if err != nil {
-		t.Fatal("Could not create dir2:", err)
+		t.Fatal("Could not create /dir1/file1:", err)
 	}
 
 	if _, err := file.WriteString("Hello world!"); err != nil {

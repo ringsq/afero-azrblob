@@ -181,7 +181,7 @@ func (fs *Fs) Remove(name string) error {
 		return err
 	}
 
-	return fs.deleteBlob(name)
+	return fs.deleteBlob(trimLeadingSlash(name))
 }
 
 // RemoveAll removes all blobs in the container
