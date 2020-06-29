@@ -5,14 +5,12 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
+	"os"
 	"strings"
 	"time"
 
 	"github.com/Azure/azure-storage-blob-go/azblob"
-	log "github.com/inconshreveable/log15"
 )
-
-const helperFileName = "azrblob_helpers"
 
 // A container name must be a valid DNS name, conforming to the following naming rules:
 // Container names must start or end with a letter or number, and can contain only letters, numbers, and the dash (-) character.
@@ -29,13 +27,11 @@ const helperFileName = "azrblob_helpers"
 // The number of path segments comprising the blob name cannot exceed 254. A path segment is the string between consecutive delimiter characters (e.g., the forward slash '/') that corresponds to the name of a virtual directory.
 
 func (fs *Fs) getContainers() ([]string, error) {
-	fcall := fmt.Sprintf(helperFileName+".(%s) listContainers()", fs.container)
-	log.Debug(fcall)
 	var containers []string
 	for marker := (azblob.Marker{}); marker.NotDone(); {
 		listCont, err := fs.serviceURL.ListContainersSegment(*fs.ctx, marker, azblob.ListContainersSegmentOptions{})
 		if err != nil {
-			log.Error(fcall + " (" + err.Error() + ")")
+			LogError(err)
 			return containers, err
 		}
 		marker = listCont.NextMarker
@@ -45,39 +41,27 @@ func (fs *Fs) getContainers() ([]string, error) {
 	}
 	return containers, nil
 }
+
 func (fs *Fs) createContainer(name string) error {
-	fcall := fmt.Sprintf(helperFileName+".(%s) createContainer(%s)", fs.container, name)
-	log.Debug(fcall)
 	if strings.ToLower(name) == "cdrs" {
 		return fmt.Errorf("cannot create [%s] container", name)
 	}
 	containerURL := fs.serviceURL.NewContainerURL(strings.ToLower(name))
 	_, err := containerURL.Create(*fs.ctx, azblob.Metadata{}, azblob.PublicAccessNone)
 	if err != nil {
-		log.Error(fcall + " (" + err.Error() + ")")
+		LogError(err)
 	}
 
 	return err
 }
-func (fs *Fs) deleteContainer(name string) error {
-	fcall := fmt.Sprintf(helperFileName+".(%s) deleteContainer(%s)", fs.container, name)
-	log.Debug(fcall)
-	if strings.ToLower(name) == "cdrs" {
-		return fmt.Errorf("cannot delete [%s] container", name)
-	}
-	containerURL := fs.serviceURL.NewContainerURL(strings.ToLower(name))
-	_, err := containerURL.Delete(*fs.ctx, azblob.ContainerAccessConditions{})
-	return err
-}
+
 func (fs *Fs) getBlobsInContainer() (blobs []string, err error) {
-	fcall := fmt.Sprintf(helperFileName+".(%s) getBlobsInContainer()", fs.container)
-	log.Debug(fcall)
 	containerURL := fs.serviceURL.NewContainerURL(fs.container)
 	for marker := (azblob.Marker{}); marker.NotDone(); { // The parens around Marker{} are required to avoid compiler error.
 		// Get a result segment starting with the blob indicated by the current Marker.
 		listBlob, err := containerURL.ListBlobsFlatSegment(*fs.ctx, marker, azblob.ListBlobsSegmentOptions{})
 		if err != nil {
-			log.Error(fcall + " (" + err.Error() + ")")
+			LogError(err)
 			return blobs, err
 		}
 
@@ -92,32 +76,113 @@ func (fs *Fs) getBlobsInContainer() (blobs []string, err error) {
 	}
 	return blobs, nil
 }
+func (fs *Fs) getBlobsInContainerFileInfoMarker(maxResults int32, prefix string) (blobs []os.FileInfo, err error) {
+	// https://godoc.org/github.com/Azure/azure-storage-blob-go/azblob#ListBlobsSegmentOptions
+	// type ListBlobsSegmentOptions struct {
+	// 	Details BlobListingDetails // No IncludeType header is produced if ""
+	// 	Prefix  string             // No Prefix header is produced if ""
+	// 	SetMaxResults sets the maximum desired results you want the service to return.
+	// 	Note, the service may return fewer results than requested.
+	// 	MaxResults=0 means no 'MaxResults' header specified.
+	// 	MaxResults int32
+	// }
+	var options azblob.ListBlobsSegmentOptions
+	if maxResults > 0 {
+		options.MaxResults = maxResults
+	}
+	if prefix != "" {
+		options.Prefix = prefix
+	}
+
+	containerURL := fs.serviceURL.NewContainerURL(fs.container)
+	if fs.marker.NotDone() {
+		listBlob, err := containerURL.ListBlobsFlatSegment(*fs.ctx, fs.marker, options)
+		if err != nil {
+			LogError(err)
+			return blobs, err
+		}
+
+		fs.marker = listBlob.NextMarker
+
+		// https://godoc.org/github.com/Azure/azure-storage-blob-go/azblob#BlobProperties
+		// type BlobProperties struct {
+		// 	// XMLName is used for marshalling and is subject to removal in a future release.
+		// 	XMLName      xml.Name   `xml:"Properties"`
+		// 	CreationTime *time.Time `xml:"Creation-Time"`
+		// 	LastModified time.Time  `xml:"Last-Modified"`
+		// 	Etag         ETag       `xml:"Etag"`
+		// 	// ContentLength - Size in bytes
+		// 	ContentLength      *int64  `xml:"Content-Length"`
+		// 	ContentType        *string `xml:"Content-Type"`
+		// 	ContentEncoding    *string `xml:"Content-Encoding"`
+		// 	ContentLanguage    *string `xml:"Content-Language"`
+		// 	ContentMD5         []byte  `xml:"Content-MD5"`
+		// 	ContentDisposition *string `xml:"Content-Disposition"`
+		// 	CacheControl       *string `xml:"Cache-Control"`
+		// 	BlobSequenceNumber *int64  `xml:"x-ms-blob-sequence-number"`
+		// 	// BlobType - Possible values include: 'BlobBlockBlob', 'BlobPageBlob', 'BlobAppendBlob', 'BlobNone'
+		// 	BlobType BlobType `xml:"BlobType"`
+		// 	// LeaseStatus - Possible values include: 'LeaseStatusLocked', 'LeaseStatusUnlocked', 'LeaseStatusNone'
+		// 	LeaseStatus LeaseStatusType `xml:"LeaseStatus"`
+		// 	// LeaseState - Possible values include: 'LeaseStateAvailable', 'LeaseStateLeased', 'LeaseStateExpired', 'LeaseStateBreaking', 'LeaseStateBroken', 'LeaseStateNone'
+		// 	LeaseState LeaseStateType `xml:"LeaseState"`
+		// 	// LeaseDuration - Possible values include: 'LeaseDurationInfinite', 'LeaseDurationFixed', 'LeaseDurationNone'
+		// 	LeaseDuration LeaseDurationType `xml:"LeaseDuration"`
+		// 	CopyID        *string           `xml:"CopyId"`
+		// 	// CopyStatus - Possible values include: 'CopyStatusPending', 'CopyStatusSuccess', 'CopyStatusAborted', 'CopyStatusFailed', 'CopyStatusNone'
+		// 	CopyStatus             CopyStatusType `xml:"CopyStatus"`
+		// 	CopySource             *string        `xml:"CopySource"`
+		// 	CopyProgress           *string        `xml:"CopyProgress"`
+		// 	CopyCompletionTime     *time.Time     `xml:"CopyCompletionTime"`
+		// 	CopyStatusDescription  *string        `xml:"CopyStatusDescription"`
+		// 	ServerEncrypted        *bool          `xml:"ServerEncrypted"`
+		// 	IncrementalCopy        *bool          `xml:"IncrementalCopy"`
+		// 	DestinationSnapshot    *string        `xml:"DestinationSnapshot"`
+		// 	DeletedTime            *time.Time     `xml:"DeletedTime"`
+		// 	RemainingRetentionDays *int32         `xml:"RemainingRetentionDays"`
+		// 	// AccessTier - Possible values include: 'AccessTierP4', 'AccessTierP6', 'AccessTierP10', 'AccessTierP15', 'AccessTierP20', 'AccessTierP30', 'AccessTierP40', 'AccessTierP50', 'AccessTierP60', 'AccessTierP70', 'AccessTierP80', 'AccessTierHot', 'AccessTierCool', 'AccessTierArchive', 'AccessTierNone'
+		// 	AccessTier         AccessTierType `xml:"AccessTier"`
+		// 	AccessTierInferred *bool          `xml:"AccessTierInferred"`
+		// 	// ArchiveStatus - Possible values include: 'ArchiveStatusRehydratePendingToHot', 'ArchiveStatusRehydratePendingToCool', 'ArchiveStatusNone'
+		// 	ArchiveStatus             ArchiveStatusType `xml:"ArchiveStatus"`
+		// 	CustomerProvidedKeySha256 *string           `xml:"CustomerProvidedKeySha256"`
+		// 	AccessTierChangeTime      *time.Time        `xml:"AccessTierChangeTime"`
+		// }
+		for _, blobInfo := range listBlob.Segment.BlobItems {
+			fi := FileInfo{
+				directory:   false,
+				name:        blobInfo.Name,
+				sizeInBytes: *blobInfo.Properties.ContentLength,
+				modTime:     blobInfo.Properties.LastModified,
+			}
+			blobs = append(blobs, fi)
+		}
+	}
+
+	return blobs, nil
+}
 
 func (fs *Fs) getBlobURL(blob string) azblob.BlockBlobURL {
-	fcall := fmt.Sprintf(helperFileName+".(%s) getBlobURL(%s)", fs.container, blob)
-	log.Debug(fcall)
 	containerURL := fs.serviceURL.NewContainerURL(fs.container)
 	return containerURL.NewBlockBlobURL(blob)
 }
 
 func (fs *Fs) blobRead(blob string, offset, count int64) (*[]byte, error) {
-	fcall := fmt.Sprintf(helperFileName+".(%s) blockBlobRead(%s,%d,%d)", fs.container, blob, offset, count)
-	log.Debug(fcall)
 	blobURL := fs.getBlobURL(blob)
 	resp, err := blobURL.Download(*fs.ctx, offset, count, azblob.BlobAccessConditions{}, false)
 	if err != nil {
-		log.Error(fcall + " (" + err.Error() + ")")
+		LogError(err)
 		return nil, err
 	}
 
 	result, err := ioutil.ReadAll(resp.Body(azblob.RetryReaderOptions{}))
 	if err != nil {
-		log.Error(fcall + " (" + err.Error() + ")")
+		LogError(err)
 		return nil, err
 	}
 
 	if len(result) == 0 {
-		log.Error(fcall + " (" + io.EOF.Error() + ")")
+		LogError(io.EOF)
 		return nil, io.EOF
 	}
 
@@ -125,27 +190,21 @@ func (fs *Fs) blobRead(blob string, offset, count int64) (*[]byte, error) {
 }
 
 func (fs *Fs) blobStageBlock(blob, base64BlockID string, p *[]byte) (*azblob.BlockBlobStageBlockResponse, error) {
-	fcall := fmt.Sprintf(helperFileName+".(%s) blobStageBlock(%s, %s, p *[%d]byte)", fs.container, blob, base64BlockID, len(*p))
-	log.Debug(fcall)
 	blobURL := fs.getBlobURL(blob)
 	return blobURL.StageBlock(*fs.ctx, base64BlockID, bytes.NewReader(*p), azblob.LeaseAccessConditions{}, nil)
 }
 
 func (fs *Fs) blobCommitBlockList(blob string, base64BlockIDs *[]string) (*azblob.BlockBlobCommitBlockListResponse, error) {
-	fcall := fmt.Sprintf(helperFileName+".(%s) blobCommitBlockList(%s, base64BlockIDs *[%d]string)", fs.container, blob, len(*base64BlockIDs))
-	log.Debug(fcall)
 	blobURL := fs.getBlobURL(blob)
 	return blobURL.CommitBlockList(*fs.ctx, *base64BlockIDs, azblob.BlobHTTPHeaders{}, nil, azblob.BlobAccessConditions{})
 }
 
 func (fs *Fs) getContainerFileInfo() (*FileInfo, error) {
-	fcall := fmt.Sprintf(helperFileName+".(%s) getContainerFileInfo()", fs.container)
-	log.Debug(fcall)
 	var result FileInfo
 	containerURL := fs.serviceURL.NewContainerURL(fs.container)
 	contProps, err := containerURL.GetProperties(*fs.ctx, azblob.LeaseAccessConditions{})
 	if err != nil {
-		log.Error(fcall + " (" + err.Error() + ")")
+		LogError(err)
 		return &result, err
 	}
 
@@ -157,13 +216,11 @@ func (fs *Fs) getContainerFileInfo() (*FileInfo, error) {
 }
 
 func (fs *Fs) getBlobFileInfo(blob string) (*FileInfo, error) {
-	fcall := fmt.Sprintf(helperFileName+".(%s) getBlobFileInfo(%s)", fs.container, blob)
-	log.Debug(fcall)
 	var result FileInfo
 	blobURL := fs.getBlobURL(blob)
 	blobProps, err := blobURL.GetProperties(*fs.ctx, azblob.BlobAccessConditions{})
 	if err != nil {
-		log.Error(fcall + " (" + err.Error() + ")")
+		LogError(err)
 		return &result, err
 	}
 
@@ -177,25 +234,21 @@ func (fs *Fs) getBlobFileInfo(blob string) (*FileInfo, error) {
 }
 
 func (fs *Fs) deleteBlob(blob string) error {
-	fcall := fmt.Sprintf(helperFileName+".(%s) deleteBlob(%s)", fs.container, blob)
-	log.Debug(fcall)
 	blobURL := fs.getBlobURL(blob)
 	_, err := blobURL.Delete(*fs.ctx, azblob.DeleteSnapshotsOptionNone, azblob.BlobAccessConditions{})
 	if err != nil {
-		log.Error(fcall + " (" + err.Error() + ")")
+		LogError(err)
 	}
 
 	return err
 }
 
 func (fs *Fs) copyBlob(srcBlob, dstBlob string) error {
-	fcall := fmt.Sprintf(helperFileName+".(%s) copyBlob(%s, %s)", fs.container, srcBlob, dstBlob)
-	log.Debug(fcall)
 	srcBlobURL := fs.getBlobURL(srcBlob)
 	dstBlobURL := fs.getBlobURL(dstBlob)
 	startCopy, err := dstBlobURL.StartCopyFromURL(*fs.ctx, srcBlobURL.URL(), nil, azblob.ModifiedAccessConditions{}, azblob.BlobAccessConditions{})
 	if err != nil {
-		log.Error(fcall + " (" + err.Error() + ")")
+		LogError(err)
 		return err
 	}
 
@@ -204,7 +257,7 @@ func (fs *Fs) copyBlob(srcBlob, dstBlob string) error {
 		time.Sleep(time.Second * 2)
 		getMetadata, err := dstBlobURL.GetProperties(*fs.ctx, azblob.BlobAccessConditions{})
 		if err != nil {
-			log.Error(fcall + " (" + err.Error() + ")")
+			LogError(err)
 			return err
 		}
 		copyStatus = getMetadata.CopyStatus()
@@ -214,17 +267,15 @@ func (fs *Fs) copyBlob(srcBlob, dstBlob string) error {
 }
 
 func (fs *Fs) renameBlob(oldName, newName string) error {
-	fcall := fmt.Sprintf(helperFileName+".(%s) renameBlob(%s, %s)", fs.container, oldName, newName)
-	log.Debug(fcall)
 	err := fs.copyBlob(oldName, newName)
 	if err != nil {
-		log.Error(fcall + " (" + err.Error() + ")")
+		LogError(err)
 		return err
 	}
 
 	err = fs.deleteBlob(oldName)
 	if err != nil {
-		log.Error(fcall + " (" + err.Error() + ")")
+		LogError(err)
 	}
 
 	return err

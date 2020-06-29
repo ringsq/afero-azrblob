@@ -2,19 +2,15 @@ package azrblob
 
 import (
 	"encoding/base64"
-	"fmt"
 	"io"
 	"os"
 	"path/filepath"
-	"strings"
 
+	"github.com/Azure/azure-storage-blob-go/azblob"
 	"github.com/google/uuid"
-	log "github.com/inconshreveable/log15"
 
 	"github.com/spf13/afero"
 )
-
-const fileFileName = "azrblob_file"
 
 // File Interfaces and Methods Available:
 // io.Closer
@@ -52,12 +48,12 @@ type File struct {
 	// State of the stream if we are writing the file
 	streamWrite    bool
 	base64BlockIDs []string
+
+	marker azblob.Marker
 }
 
 // NewFile initializes an File object.
 func NewFile(fs *Fs, name string) *File {
-	fcall := fmt.Sprintf(fileFileName+".NewFile(fs,%s)", name)
-	log.Debug(fcall)
 	name = trimLeadingSlash(name)
 	return &File{
 		fs:   fs,
@@ -67,8 +63,6 @@ func NewFile(fs *Fs, name string) *File {
 
 // Name returns the filename, i.e. Azure blob path without the container name.
 func (f *File) Name() string {
-	fcall := fmt.Sprintf(fileFileName+".Name() (%s)", f.name)
-	log.Debug(fcall)
 	return f.name
 }
 
@@ -97,30 +91,23 @@ func (f *File) path() string {
 // directory, Readdir returns the FileInfo read until that point
 // and a non-nil error.
 func (f *File) Readdir(n int) ([]os.FileInfo, error) {
-	fcall := fmt.Sprintf(fileFileName+".(%s) Readdir(%d)", f.name, n)
-	log.Debug(fcall)
 	if n <= 0 {
 		return f.ReaddirAll()
 	}
-	path := f.path()
-	log.Debug(fcall + " (" + path + ")")
 
-	blobs, err := f.fs.getBlobsInContainer()
-	if err != nil {
-		log.Error(fcall + " (" + err.Error() + ")")
-		return nil, err
+	path := f.path()
+	prefix := trimLeadingSlash(path)
+	if prefix == "/" {
+		prefix = ""
 	}
 
-	var fis []os.FileInfo
-	for _, blob := range blobs {
-		if path == "/" || strings.HasPrefix(blob, path+"/") {
-			fi, err := f.fs.getBlobFileInfo(blob)
-			if err != nil {
-				log.Error(fcall + " (" + err.Error() + ")")
-				return nil, err
-			}
-			fis = append(fis, fi)
-		}
+	fis, err := f.fs.getBlobsInContainerFileInfoMarker(int32(n), prefix)
+	if err != nil {
+		LogError(err)
+		return nil, err
+	}
+	if f.fs.marker.NotDone() {
+		return fis, nil
 	}
 
 	return fis, io.EOF
@@ -128,21 +115,20 @@ func (f *File) Readdir(n int) ([]os.FileInfo, error) {
 
 // ReaddirAll provides list of file cachedInfo.
 func (f *File) ReaddirAll() ([]os.FileInfo, error) {
-	fcall := fmt.Sprintf(fileFileName+".(%s) ReaddirAll()", f.name)
-	log.Debug(fcall)
 	var fileInfos []os.FileInfo
 	for {
-		infos, err := f.Readdir(100)
+		infos, err := f.Readdir(5000)
 		fileInfos = append(fileInfos, infos...)
 		if err != nil {
 			if err == io.EOF {
 				break
 			} else {
-				log.Error(fcall + " (" + err.Error() + ")")
+				LogError(err)
 				return nil, err
 			}
 		}
 	}
+
 	return fileInfos, nil
 }
 
@@ -159,11 +145,9 @@ func (f *File) ReaddirAll() ([]os.FileInfo, error) {
 // directory, Readdirnames returns the names read until that point and
 // a non-nil error.
 func (f *File) Readdirnames(n int) ([]string, error) {
-	fcall := fmt.Sprintf(fileFileName+".(%s) Readdirnames(%d)", f.name, n)
-	log.Debug(fcall)
 	fi, err := f.Readdir(n)
 	if err != nil {
-		log.Error(fcall + " (" + err.Error() + ")")
+		LogError(err)
 		return nil, err
 	}
 	names := make([]string, len(fi))
@@ -176,13 +160,11 @@ func (f *File) Readdirnames(n int) ([]string, error) {
 // Stat returns the FileInfo structure describing file.
 // If there is an error, it will be of type *PathError.
 func (f *File) Stat() (os.FileInfo, error) {
-	fcall := fmt.Sprintf(fileFileName+".(%s) Stat()", f.name)
-	log.Debug(fcall)
 	info, err := f.fs.Stat(f.Name())
 	if err == nil {
 		f.cachedInfo = info
 	} else {
-		log.Error(fcall + " (" + err.Error() + ")")
+		LogError(err)
 	}
 
 	return info, err
@@ -190,7 +172,6 @@ func (f *File) Stat() (os.FileInfo, error) {
 
 // Sync is a noop.
 func (f *File) Sync() error {
-	log.Debug("_file.Sync()")
 	return nil
 }
 
@@ -198,22 +179,19 @@ func (f *File) Sync() error {
 // It does not change the I/O offset.
 // If there is an error, it will be of type *PathError.
 func (f *File) Truncate(int64) error {
-	log.Debug("_file.Truncate()")
+	LogError(ErrNotImplemented)
 	return ErrNotImplemented
 }
 
 // WriteString is like Write, but writes the contents of string s rather than
 // a slice of bytes.
 func (f *File) WriteString(s string) (int, error) {
-	log.Debug(fmt.Sprintf("_file.WriteString(%s)", s))
 	return f.Write([]byte(s))
 }
 
 // Close closes the File, rendering it unusable for I/O.
 // It returns an error, if any.
 func (f *File) Close() error {
-	fcall := "_file.Close()"
-	log.Debug(fcall)
 	// Closing a reading stream
 	if f.streamRead {
 		defer func() {
@@ -229,7 +207,7 @@ func (f *File) Close() error {
 		if len(f.base64BlockIDs) > 0 {
 			_, err := f.fs.blobCommitBlockList(f.name, &f.base64BlockIDs)
 			if err != nil {
-				log.Error(fcall + " (" + err.Error() + ")")
+				LogError(err)
 			}
 			return err
 		}
@@ -242,28 +220,23 @@ func (f *File) Close() error {
 // It returns the number of bytes read and an error, if any.
 // EOF is signaled by the read offset equaling the file size with err set to io.EOF.
 func (f *File) Read(p []byte) (int, error) {
-	fcall := fmt.Sprintf(fileFileName+".(%s) Read(p [%d]byte)", f.name, len(p))
-	log.Debug(fcall)
 	bufSize := int64(len(p))
 	data, err := f.fs.blobRead(f.name, f.streamReadOffset, bufSize)
 	if err != nil {
-		log.Error(fcall + " (" + err.Error() + ")")
+		LogError(err)
 	}
 
 	bytesCopied := copy(p, *data)
 
 	if err == nil {
 		f.streamReadOffset += int64(bytesCopied)
-		log.Debug(fmt.Sprintf("streamReadOffset: %d FileSize: %d", f.streamReadOffset, f.cachedInfo.Size()))
 	}
 
 	// EOF
 	if f.streamReadOffset == f.cachedInfo.Size() && err == nil {
-		log.Debug(fcall + " (bytesCopied < bufSize && err == nil)")
 		return bytesCopied, io.EOF
 	}
 
-	log.Debug(fcall + fmt.Sprintf(" (n: %d)", bytesCopied))
 	return bytesCopied, err
 }
 
@@ -272,11 +245,9 @@ func (f *File) Read(p []byte) (int, error) {
 // ReadAt always returns a non-nil error when n < len(b).
 // At end of file, that error is io.EOF.
 func (f *File) ReadAt(p []byte, off int64) (n int, err error) {
-	fcall := fmt.Sprintf(fileFileName+".(%s) ReadAt(p [%d]byte,%d)", f.name, len(p), off)
-	log.Debug(fcall)
 	_, err = f.Seek(off, io.SeekStart)
 	if err != nil {
-		log.Error(fcall + " (" + err.Error() + ")")
+		LogError(err)
 		return
 	}
 	n, err = f.Read(p)
@@ -289,18 +260,14 @@ func (f *File) ReadAt(p []byte, off int64) (n int, err error) {
 // It returns the new offset and an error, if any.
 // The behavior of Seek on a file opened with O_APPEND is not specified.
 func (f *File) Seek(offset int64, whence int) (int64, error) {
-	fcall := fmt.Sprintf(fileFileName+".(%s) Seek(%d, %d)", f.name, offset, whence)
-	log.Debug(fcall)
-
 	// Write seek is not supported
 	if f.streamWrite {
-		log.Error(fmt.Sprintf(fcall+" (%d, %s)", 0, ErrNotSupported.Error()))
+		LogError(ErrNotSupported)
 		return 0, ErrNotSupported
 	}
 
 	// Read seek
 	if f.streamRead {
-		log.Debug(fmt.Sprintf(fcall+" (%d, %s)", 0, "f.seekRead(offset, whence)"))
 		startByte := int64(0)
 
 		switch whence {
@@ -313,7 +280,7 @@ func (f *File) Seek(offset int64, whence int) (int64, error) {
 		}
 
 		if startByte < 0 {
-			log.Error(fcall + " (" + ErrInvalidSeek.Error() + ")")
+			LogError(ErrInvalidSeek)
 			return startByte, ErrInvalidSeek
 		}
 
@@ -321,7 +288,7 @@ func (f *File) Seek(offset int64, whence int) (int64, error) {
 		return startByte, nil
 	}
 
-	log.Error(fmt.Sprintf(fcall+" (%d,%s)", 0, afero.ErrFileClosed.Error()))
+	LogError(afero.ErrFileClosed)
 	return 0, afero.ErrFileClosed
 }
 
@@ -329,14 +296,12 @@ func (f *File) Seek(offset int64, whence int) (int64, error) {
 // It returns the number of bytes written and an error, if any.
 // Write returns a non-nil error when n != len(b).
 func (f *File) Write(p []byte) (int, error) {
-	fcall := fmt.Sprintf(fileFileName+".(%s) Write(p [%d]byte)", f.name, len(p))
-	log.Debug(fcall)
 	base64BlockID := newBase64BlockID()
 	f.base64BlockIDs = append(f.base64BlockIDs, base64BlockID)
 
 	_, err := f.fs.blobStageBlock(f.name, base64BlockID, &p)
 	if err != nil {
-		log.Error(fcall + " (" + err.Error() + ")")
+		LogError(err)
 	}
 	n := len(p)
 
@@ -347,11 +312,9 @@ func (f *File) Write(p []byte) (int, error) {
 // It returns the number of bytes written and an error, if any.
 // WriteAt returns a non-nil error when n != len(p).
 func (f *File) WriteAt(p []byte, off int64) (n int, err error) {
-	fcall := fmt.Sprintf(fileFileName+".(%s) WriteAt(p [%d]byte, %d)", f.name, len(p), off)
-	log.Debug(fcall)
 	_, err = f.Seek(off, 0)
 	if err != nil {
-		log.Error(fcall + " (" + err.Error() + ")")
+		LogError(err)
 		return
 	}
 	n, err = f.Write(p)
