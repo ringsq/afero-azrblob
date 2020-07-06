@@ -31,6 +31,7 @@ import (
 // Fs is an FS object backed by Azure.
 type Fs struct {
 	container  string
+	cached     bool
 	ctx        *context.Context
 	serviceURL *azblob.ServiceURL
 	marker     azblob.Marker
@@ -71,11 +72,12 @@ func LogDebug(entry string) {
 }
 
 // NewFs creates a new Fs object writing files to a given Azure container.
-func NewFs(ctx *context.Context, serviceURL *azblob.ServiceURL, container string) *Fs {
+func NewFs(ctx *context.Context, serviceURL *azblob.ServiceURL, container string, cached bool) *Fs {
 	return &Fs{
 		container:  container,
 		ctx:        ctx,
 		serviceURL: serviceURL,
+		cached:     cached,
 	}
 }
 

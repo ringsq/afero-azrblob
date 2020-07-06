@@ -49,7 +49,8 @@ type File struct {
 	streamWrite    bool
 	base64BlockIDs []string
 
-	marker azblob.Marker
+	marker      azblob.Marker
+	lastListing string
 }
 
 // NewFile initializes an File object.
@@ -77,8 +78,8 @@ func (f *File) path() string {
 }
 
 // Readdir reads the contents of the directory associated with file and
-// returns a slice of up to n FileInfo values, as would be returned
-// by ListObjects, in directory order. Subsequent calls on the same file will yield further FileInfos.
+// returns a slice of up to n FileInfo values in directory order.
+// Subsequent calls on the same file will yield further FileInfos.
 //
 // If n > 0, Readdir returns at most n FileInfo structures. In this case, if
 // Readdir returns an empty slice, it will return a non-nil error
@@ -100,7 +101,24 @@ func (f *File) Readdir(n int) ([]os.FileInfo, error) {
 	if prefix == "/" {
 		prefix = ""
 	}
+	if f.fs.cached {
+		cache, err := GetContainerCache(f.fs.container)
+		if err != nil {
+			LogError(err)
+			return nil, err
+		}
 
+		fileInfos, err := cache.ReadCache(prefix, f.lastListing, n)
+		if err != nil {
+			LogError(err)
+			return nil, err
+		}
+		if len(fileInfos) == n {
+			f.lastListing = fileInfos[len(fileInfos)-1].Name()
+		} else {
+			f.lastListing = ""
+		}
+	}
 	fis, err := f.fs.getBlobsInContainerFileInfoMarker(int32(n), prefix)
 	if err != nil {
 		LogError(err)
@@ -116,15 +134,36 @@ func (f *File) Readdir(n int) ([]os.FileInfo, error) {
 // ReaddirAll provides list of file cachedInfo.
 func (f *File) ReaddirAll() ([]os.FileInfo, error) {
 	var fileInfos []os.FileInfo
-	for {
-		infos, err := f.Readdir(5000)
-		fileInfos = append(fileInfos, infos...)
+
+	if f.fs.cached {
+		path := f.path()
+		prefix := trimLeadingSlash(path)
+		if prefix == "/" {
+			prefix = ""
+		}
+
+		cache, err := GetContainerCache(f.fs.container)
 		if err != nil {
-			if err == io.EOF {
-				break
-			} else {
-				LogError(err)
-				return nil, err
+			LogError(err)
+			return nil, err
+		}
+
+		fileInfos, err = cache.ReadCache(prefix, "", -1)
+		if err != nil {
+			LogError(err)
+			return nil, err
+		}
+	} else {
+		for {
+			infos, err := f.Readdir(5000)
+			fileInfos = append(fileInfos, infos...)
+			if err != nil {
+				if err == io.EOF {
+					break
+				} else {
+					LogError(err)
+					return nil, err
+				}
 			}
 		}
 	}

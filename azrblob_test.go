@@ -91,12 +91,49 @@ func GetFs(t *testing.T) afero.Fs {
 	ctx := context.Background()
 
 	// Initialize the file system
-	azrblobFs := NewFs(&ctx, &serviceURL, container)
+	azrblobFs := NewFs(&ctx, &serviceURL, container, false)
 
 	// err = createTestContainer(azrblobFs, container)
 	err = emptyTestContainer(azrblobFs)
 	if err != nil {
 		t.Fatal("Could not create empty test container", err)
+	}
+
+	return azrblobFs
+}
+func GetCachedFs(t *testing.T) afero.Fs {
+	accountName, accountKey := accountInfo()
+	container := "afero-test"
+
+	if accountName == "" || accountKey == "" {
+		t.Fatal("Error loading .env file")
+	}
+
+	// get the credentials
+	credential, err := azblob.NewSharedKeyCredential(accountName, accountKey)
+	if err != nil {
+		return nil
+	}
+
+	// build the context for the Azure Blob Storage
+	p := azblob.NewPipeline(credential, azblob.PipelineOptions{})
+	u, _ := url.Parse(fmt.Sprintf("https://%s.blob.core.windows.net", accountName))
+	serviceURL := azblob.NewServiceURL(*u, p)
+	ctx := context.Background()
+
+	// Initialize the file system
+	azrblobFs := NewFs(&ctx, &serviceURL, container, true)
+
+	err = emptyTestContainer(azrblobFs)
+	if err != nil {
+		t.Fatal("Could not create empty test container", err)
+	}
+
+	// cache the test container
+	cache := []CreateCache{{Name: container, Cycle: 1.0, Path: "/tmp", AccountName: accountName, AccountKey: accountKey}}
+	err = InitCachedContainers(cache)
+	if err != nil {
+		return nil
 	}
 
 	return azrblobFs
@@ -674,4 +711,64 @@ func TestChmod(t *testing.T) {
 	if err := fs.Chmod(name, 0750); err == nil {
 		t.Fatal("If Chmod is supported, we should have a check here")
 	}
+}
+func TestCachedFs(t *testing.T) {
+	fs := GetCachedFs(t)
+
+	testCreateFile(t, fs, "file1", "content of file 1")
+	testCreateFile(t, fs, "file2", "content of file 2")
+	testCreateFile(t, fs, "file3", "content of file 3")
+
+	file, errOpen := fs.Open("/")
+	if errOpen != nil {
+		t.Fatal("Error opening \"/\"", errOpen)
+	}
+
+	fi, err := file.Readdir(-1)
+	if err != nil {
+		t.Fatal("Error retrieving blobs", err)
+	}
+
+	if len(fi) > 0 {
+		t.Fatal(fmt.Sprintf("%d Blobs returned from ReadirAll before cache update", len(fi)))
+	}
+
+	// sleep to wait for cache update
+	time.Sleep(90 * time.Second)
+
+	fi, err = file.Readdir(-1)
+	if err != nil {
+		t.Fatal("Error retrieving blobs", err)
+	}
+
+	if len(fi) != 3 {
+		t.Fatal(fmt.Sprintf("3 Blobs expected but %d returned from ReadirAll after cache update", len(fi)))
+	}
+
+	err = fs.Remove("/file2")
+	if err != nil {
+		t.Fatal("Could not remove /file2:", err)
+	}
+
+	fi, err = file.Readdir(-1)
+	if err != nil {
+		t.Fatal("Error retrieving blobs", err)
+	}
+
+	if len(fi) != 3 {
+		t.Fatal(fmt.Sprintf("3 Blobs expected but %d returned from ReadirAll after delete and before cache update", len(fi)))
+	}
+
+	// sleep to wait for cache update
+	time.Sleep(90 * time.Second)
+
+	fi, err = file.Readdir(-1)
+	if err != nil {
+		t.Fatal("Error retrieving blobs", err)
+	}
+
+	if len(fi) != 2 {
+		t.Fatal(fmt.Sprintf("2 Blobs expected but %d returned from ReadirAll after delete and after cache update", len(fi)))
+	}
+
 }
