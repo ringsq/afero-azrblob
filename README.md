@@ -6,6 +6,7 @@ It provides an [Azure Blob](https://azure.microsoft.com/en-us/services/storage/b
 - Uses azblob in [azure-storage-blob-go](https://github.com/Azure/azure-storage-blob-go/) for Azure Blob REST APIs
 - Download & upload files
 - 80% coverage (all APIs are tested, but not all errors are reproduced)
+- Containers that have a large enough number of blobs that cause the listing to timeout can be cached
 
 ## Known limitations
 - File appending is not supported because Azure Blob Storage doesn't support it for Block Blobs.
@@ -29,10 +30,19 @@ func main() {
   accountKey := "accountKey"
   container := "mycontainer"
 
+  // cache the container with a cycle of 7.0 minutes and a path of /tmp for the cache files
+  cachedContainers := []azrblob.CreateCache{{Name: container, Cycle: 7.0, Path: "/tmp", AccountName: accountName, AccountKey: accountKey}}
+  err := azrblob.InitCachedContainers(cachedContainers)
+  if err != nil {
+    log(err)
+    return
+  }
+
   // get the credentials
   credential, err := azblob.NewSharedKeyCredential(accountName, accountKey)
   if err != nil {
-    return nil, err
+    log(err)
+    return
   }
 
   // build the context for the Azure Blob Storage
@@ -41,8 +51,8 @@ func main() {
   serviceURL := azblob.NewServiceURL(*u, p)
   ctx := context.Background()
 
-  // Initialize the file system
-  azrblobFs := azrblob.NewFs(&ctx, &serviceURL, container)
+  // Initialize the file system - the last parameter indicates wether or not the container is cached
+  azrblobFs := azrblob.NewFs(&ctx, &serviceURL, container, true)
 
   // And do your thing
   file, _ := fs.OpenFile(name, os.O_WRONLY, 0777)

@@ -34,9 +34,9 @@ type CreateCache struct {
 
 // ContainerCache - a struct that represents all the necessary info to manage the caching of a container's blob list
 type ContainerCache struct {
-	container  string
-	cycle      float64
-	path       string
+	Container  string
+	Cycle      float64
+	Path       string
 	stop       bool
 	updating   bool
 	lastUpdate time.Time
@@ -47,13 +47,12 @@ type ContainerCache struct {
 
 // CachedContainers - collection of cached containers
 var CachedContainers []ContainerCache
-var errNotCacheConfig = errors.New("config not for cached container")
 
 // GetContainerCache - gets the specified container cache specifically for reading
 func GetContainerCache(container string) (ContainerCache, error) {
 	var cache ContainerCache
 	for _, c := range CachedContainers {
-		if c.container == container {
+		if c.Container == container {
 			cache = c
 		}
 	}
@@ -86,9 +85,9 @@ func createContainerCache(container CreateCache) (ContainerCache, error) {
 
 	}
 
-	cache.cycle = container.Cycle
-	cache.container = container.Name
-	cache.path = container.Path
+	cache.Cycle = container.Cycle
+	cache.Container = container.Name
+	cache.Path = container.Path
 
 	err := cache.initCredentials(container.AccountName, container.AccountKey)
 	if err != nil {
@@ -129,31 +128,31 @@ func InitCachedContainers(containers []CreateCache) error {
 }
 
 func (cc *ContainerCache) logError(err error) {
-	fmt.Printf("CACHE-ERRO[%s] [%s] %s\n", time.Now().Format("01-02|15:04:05"), cc.container, err.Error())
+	fmt.Printf("CACHE-ERRO[%s] [%s] %s\n", time.Now().Format("01-02|15:04:05"), cc.Container, err.Error())
 	return
 }
 func (cc *ContainerCache) logInfo(msg string) {
-	fmt.Printf("CACHE-INFO[%s] [%s] %s\n", time.Now().Format("01-02|15:04:05"), cc.container, msg)
+	fmt.Printf("CACHE-INFO[%s] [%s] %s\n", time.Now().Format("01-02|15:04:05"), cc.Container, msg)
 	return
 }
 func (cc *ContainerCache) logDebug(msg string) {
-	fmt.Printf("CACHE-DBUG[%s] [%s] %s\n", time.Now().Format("01-02|15:04:05"), cc.container, msg)
+	fmt.Printf("CACHE-DBUG[%s] [%s] %s\n", time.Now().Format("01-02|15:04:05"), cc.Container, msg)
 	return
 }
 func (cc *ContainerCache) getCacheFilePath() string {
-	return cc.path + "/" + "cache-" + cc.container + ".csv"
+	return cc.Path + "/" + "cache-" + cc.Container + ".csv"
 }
 func (cc *ContainerCache) getCacheNewFilePath(ts time.Time) string {
-	return cc.path + "/" + "cache-" + cc.container + "-" + ts.Format(cacheFileSuffixFormat) + ".csv"
+	return cc.Path + "/" + "cache-" + cc.Container + "-" + ts.Format(cacheFileSuffixFormat) + ".csv"
 }
 func (cc *ContainerCache) getCacheOldFilePath() string {
-	return cc.path + "/" + "cache-" + cc.container + "-old.csv"
+	return cc.Path + "/" + "cache-" + cc.Container + "-old.csv"
 }
 
 // initCredentials - initialize the context and service for the provided credentials
 func (cc *ContainerCache) initCredentials(accountName, accountKey string) error {
 	if accountName == "" || accountKey == "" {
-		err := fmt.Errorf("accountName and accountKey are  both requird for azure container %s", cc.container)
+		err := fmt.Errorf("accountName and accountKey are  both requird for azure container %s", cc.Container)
 		return err
 	}
 
@@ -178,7 +177,7 @@ func (cc *ContainerCache) initCredentials(accountName, accountKey string) error 
 func (cc *ContainerCache) startCycling() {
 	for cc.stop == false {
 		if !cc.updating {
-			if time.Since(cc.lastUpdate).Minutes() >= cc.cycle {
+			if time.Since(cc.lastUpdate).Minutes() >= cc.Cycle {
 				err := make(chan error)
 				go cc.cycleUpdate(err)
 				cerr := <-err
@@ -249,7 +248,7 @@ func (cc *ContainerCache) update() error {
 	writer := csv.NewWriter(file)
 	defer writer.Flush()
 
-	containerURL := cc.serviceURL.NewContainerURL(cc.container)
+	containerURL := cc.serviceURL.NewContainerURL(cc.Container)
 	for cc.marker = (azblob.Marker{}); cc.marker.NotDone(); {
 		listBlob, err := containerURL.ListBlobsFlatSegment(*cc.ctx, cc.marker, azblob.ListBlobsSegmentOptions{})
 		if err != nil {
@@ -321,7 +320,7 @@ func (cc *ContainerCache) renameNew() error {
 			cc.logError(err)
 			return rerr
 		}
-		cc.logError(fmt.Errorf("rolled back to previous cache file for container %s due to %s", cc.container, err.Error()))
+		cc.logError(fmt.Errorf("rolled back to previous cache file for container %s due to %s", cc.Container, err.Error()))
 	}
 
 	return nil
