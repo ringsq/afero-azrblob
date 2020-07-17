@@ -772,3 +772,90 @@ func TestCachedFs(t *testing.T) {
 	}
 
 }
+func wildCardListingNonCached(fs afero.Fs, filter string, expected int) (string, error) {
+	file, err := fs.Open(filter)
+	if err != nil {
+		return "Error opening \"/\"", err
+	}
+
+	fi, err := file.Readdir(-1)
+	if err != nil {
+		return "Error retrieving blobs", err
+	}
+
+	if len(fi) != expected {
+		return fmt.Sprintf("%d Blobs returned from ReadirAll expected %d", len(fi), expected), nil
+	}
+
+	err = file.Close()
+	if err != nil {
+		return "Error closing file", err
+	}
+
+	return "", nil
+}
+func createWildCardFiles(fs afero.Fs, t *testing.T) {
+	testCreateFile(t, fs, "file1.txt", "content of file 1")
+	testCreateFile(t, fs, "file2.log", "content of file 2")
+	testCreateFile(t, fs, "file3.pdf", "content of file 3")
+	testCreateFile(t, fs, "file4.dbf", "content of file 4")
+	testCreateFile(t, fs, "file3.dbf", "content of file 3 dbf")
+	testCreateFile(t, fs, "file3.html", "content of file 3 html")
+
+}
+func performWildCardTests(fs afero.Fs) (msg string, err error) {
+	msg, err = wildCardListingNonCached(fs, "*.log", 1)
+	if msg != "" {
+		return
+	}
+
+	msg, err = wildCardListingNonCached(fs, "*.??f", 3)
+	if msg != "" {
+		return
+	}
+
+	msg, err = wildCardListingNonCached(fs, "*.?f", 0)
+	if msg != "" {
+		return
+	}
+
+	msg, err = wildCardListingNonCached(fs, "*.?*", 6)
+	if msg != "" {
+		return
+	}
+
+	msg, err = wildCardListingNonCached(fs, "*3.*", 3)
+	if msg != "" {
+		return
+	}
+
+	msg, err = wildCardListingNonCached(fs, "*3.???", 2)
+	if msg != "" {
+		return
+	}
+	return "", nil
+}
+func TestWildCardListingNonCached(t *testing.T) {
+	fs := GetFs(t)
+
+	createWildCardFiles(fs, t)
+	msg, err := performWildCardTests(fs)
+	if msg != "" {
+		t.Fatal(msg, err)
+	}
+}
+
+func TestWildCardListingCached(t *testing.T) {
+	fs := GetCachedFs(t)
+
+	createWildCardFiles(fs, t)
+
+	// sleep to wait for cache update
+	time.Sleep(90 * time.Second)
+
+	msg, err := performWildCardTests(fs)
+	if msg != "" {
+		t.Fatal(msg, err)
+	}
+
+}

@@ -6,6 +6,7 @@ import (
 	"io"
 	"io/ioutil"
 	"os"
+	"regexp"
 	"strings"
 	"time"
 
@@ -76,7 +77,7 @@ func (fs *Fs) getBlobsInContainer() (blobs []string, err error) {
 	}
 	return blobs, nil
 }
-func (fs *Fs) getBlobsInContainerFileInfoMarker(maxResults int32, prefix string) (blobs []os.FileInfo, err error) {
+func (f *File) getBlobsInContainerFileInfoMarker(maxResults int32, prefix, filter string) (blobs []os.FileInfo, err error) {
 	// https://godoc.org/github.com/Azure/azure-storage-blob-go/azblob#ListBlobsSegmentOptions
 	// type ListBlobsSegmentOptions struct {
 	// 	Details BlobListingDetails // No IncludeType header is produced if ""
@@ -94,15 +95,23 @@ func (fs *Fs) getBlobsInContainerFileInfoMarker(maxResults int32, prefix string)
 		options.Prefix = prefix
 	}
 
-	containerURL := fs.serviceURL.NewContainerURL(fs.container)
-	if fs.marker.NotDone() {
-		listBlob, err := containerURL.ListBlobsFlatSegment(*fs.ctx, fs.marker, options)
+	var rexp *regexp.Regexp
+	if filter != "" {
+		rexp, err = getFilterRegExp(filter)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	containerURL := f.fs.serviceURL.NewContainerURL(f.fs.container)
+	if f.azureMarker.NotDone() {
+		listBlob, err := containerURL.ListBlobsFlatSegment(*f.fs.ctx, f.azureMarker, options)
 		if err != nil {
 			LogError(err)
 			return blobs, err
 		}
 
-		fs.marker = listBlob.NextMarker
+		f.azureMarker = listBlob.NextMarker
 
 		// https://godoc.org/github.com/Azure/azure-storage-blob-go/azblob#BlobProperties
 		// type BlobProperties struct {
@@ -154,6 +163,9 @@ func (fs *Fs) getBlobsInContainerFileInfoMarker(maxResults int32, prefix string)
 				name:        blobInfo.Name,
 				sizeInBytes: *blobInfo.Properties.ContentLength,
 				modTime:     blobInfo.Properties.LastModified,
+			}
+			if rexp != nil && !rexp.Match([]byte(blobInfo.Name)) {
+				continue
 			}
 			blobs = append(blobs, fi)
 		}
@@ -214,9 +226,21 @@ func (fs *Fs) getContainerFileInfo() (*FileInfo, error) {
 
 	return &result, nil
 }
-
 func (fs *Fs) getBlobFileInfo(blob string) (*FileInfo, error) {
 	var result FileInfo
+
+	if strings.ContainsAny(blob, "*?") {
+		// result.directory = false
+		// does this trigger read dir all?
+		result.directory = true
+		// result.name = "/" + container + "/" + blob
+		result.name = blob
+		result.sizeInBytes = -1
+		result.modTime = time.Now()
+
+		return &result, nil
+	}
+
 	blobURL := fs.getBlobURL(blob)
 	blobProps, err := blobURL.GetProperties(*fs.ctx, azblob.BlobAccessConditions{})
 	if err != nil {

@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/url"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -395,7 +396,7 @@ func (cc *ContainerCache) openFileRetry(filePath string, maxAttempts int) (*os.F
 }
 
 // ReadCache - reads in the cached container CSV file and returns an array of FileInfo
-func (cc *ContainerCache) ReadCache(prefix, lastListing string, n int) ([]os.FileInfo, error) {
+func (cc *ContainerCache) ReadCache(prefix, filter, cacheMarker string, n int) ([]os.FileInfo, error) {
 	var result []os.FileInfo
 
 	cacheFilePath := cc.getCacheFilePath()
@@ -412,6 +413,15 @@ func (cc *ContainerCache) ReadCache(prefix, lastListing string, n int) ([]os.Fil
 		return result, err
 	}
 	defer file.Close()
+
+	var rexp *regexp.Regexp
+	if filter != "" {
+		rexp, err = getFilterRegExp(filter)
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	count := 0
 	reader := csv.NewReader(file)
 	for {
@@ -430,7 +440,10 @@ func (cc *ContainerCache) ReadCache(prefix, lastListing string, n int) ([]os.Fil
 		if prefix != "" && strings.HasPrefix(name, prefix) == false {
 			continue
 		}
-		if lastListing != "" && name <= lastListing {
+		if cacheMarker != "" && name <= cacheMarker {
+			continue
+		}
+		if rexp != nil && !rexp.Match([]byte(name)) {
 			continue
 		}
 		size, err := strconv.ParseInt(record[1], 10, 64)

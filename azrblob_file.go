@@ -5,6 +5,8 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strings"
 
 	"github.com/Azure/azure-storage-blob-go/azblob"
 	"github.com/google/uuid"
@@ -49,8 +51,8 @@ type File struct {
 	streamWrite    bool
 	base64BlockIDs []string
 
-	marker      azblob.Marker
-	lastListing string
+	azureMarker azblob.Marker
+	cacheMarker string
 }
 
 // NewFile initializes an File object.
@@ -77,6 +79,73 @@ func (f *File) path() string {
 	return path
 }
 
+func getFilterRegExp(filter string) (rexp *regexp.Regexp, err error) {
+	if filter != "" {
+		pattern := strings.ReplaceAll(filter, ".", "\\.")
+		pattern = strings.ReplaceAll(pattern, "?", ".")
+		pattern = strings.ReplaceAll(pattern, "*", ".*")
+		pattern = "^" + pattern + "$"
+
+		rexp, err = regexp.Compile(pattern)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return rexp, nil
+}
+
+func (f *File) setPrefixFilter() (prefix, filter string) {
+	if strings.ContainsAny(f.name, "?*") {
+		filter = f.name
+	} else {
+		path := f.path()
+		prefix := trimLeadingSlash(path)
+		if prefix == "/" {
+			prefix = ""
+		}
+	}
+	return
+}
+func (f *File) readDirCache(n int) (fileInfos []os.FileInfo, err error) {
+	if !f.fs.cached {
+		return
+	}
+
+	prefix, filter := f.setPrefixFilter()
+
+	cache, err := GetContainerCache(f.fs.container)
+	if err != nil {
+		LogError(err)
+		return nil, err
+	}
+
+	fileInfos, err = cache.ReadCache(prefix, filter, "", n)
+	if err != nil {
+		LogError(err)
+		return nil, err
+	}
+
+	if n > 0 {
+		if len(fileInfos) == n {
+			f.cacheMarker = fileInfos[len(fileInfos)-1].Name()
+		} else {
+			f.cacheMarker = ""
+		}
+	}
+
+	return
+}
+func (f *File) readDirNoCache(n int) (fileInfos []os.FileInfo, err error) {
+	prefix, filter := f.setPrefixFilter()
+
+	fileInfos, err = f.getBlobsInContainerFileInfoMarker(int32(n), prefix, filter)
+	if err != nil {
+		LogError(err)
+		return nil, err
+	}
+	return
+}
+
 // Readdir reads the contents of the directory associated with file and
 // returns a slice of up to n FileInfo values in directory order.
 // Subsequent calls on the same file will yield further FileInfos.
@@ -91,68 +160,43 @@ func (f *File) path() string {
 // nil error. If it encounters an error before the end of the
 // directory, Readdir returns the FileInfo read until that point
 // and a non-nil error.
-func (f *File) Readdir(n int) ([]os.FileInfo, error) {
+func (f *File) Readdir(n int) (fileInfos []os.FileInfo, err error) {
 	if n <= 0 {
 		return f.ReaddirAll()
 	}
 
-	path := f.path()
-	prefix := trimLeadingSlash(path)
-	if prefix == "/" {
-		prefix = ""
-	}
 	if f.fs.cached {
-		cache, err := GetContainerCache(f.fs.container)
+		fileInfos, err = f.readDirCache(n)
 		if err != nil {
-			LogError(err)
-			return nil, err
+			f.cacheMarker = ""
+			return
 		}
 
-		fileInfos, err := cache.ReadCache(prefix, f.lastListing, n)
+		if f.cacheMarker != "" {
+			return fileInfos, nil
+		}
+	} else {
+		fileInfos, err = f.readDirNoCache(n)
 		if err != nil {
-			LogError(err)
-			return nil, err
+			f.azureMarker = azblob.Marker{}
+			return
 		}
-		if len(fileInfos) == n {
-			f.lastListing = fileInfos[len(fileInfos)-1].Name()
-		} else {
-			f.lastListing = ""
+
+		if f.azureMarker.NotDone() {
+			return fileInfos, nil
 		}
-	}
-	fis, err := f.fs.getBlobsInContainerFileInfoMarker(int32(n), prefix)
-	if err != nil {
-		LogError(err)
-		return nil, err
-	}
-	if f.fs.marker.NotDone() {
-		return fis, nil
+
+		f.azureMarker = azblob.Marker{}
 	}
 
-	return fis, io.EOF
+	err = io.EOF
+	return
 }
 
 // ReaddirAll provides list of file cachedInfo.
-func (f *File) ReaddirAll() ([]os.FileInfo, error) {
-	var fileInfos []os.FileInfo
-
+func (f *File) ReaddirAll() (fileInfos []os.FileInfo, err error) {
 	if f.fs.cached {
-		path := f.path()
-		prefix := trimLeadingSlash(path)
-		if prefix == "/" {
-			prefix = ""
-		}
-
-		cache, err := GetContainerCache(f.fs.container)
-		if err != nil {
-			LogError(err)
-			return nil, err
-		}
-
-		fileInfos, err = cache.ReadCache(prefix, "", -1)
-		if err != nil {
-			LogError(err)
-			return nil, err
-		}
+		fileInfos, err = f.readDirCache(-1)
 	} else {
 		for {
 			infos, err := f.Readdir(5000)
@@ -167,8 +211,7 @@ func (f *File) ReaddirAll() ([]os.FileInfo, error) {
 			}
 		}
 	}
-
-	return fileInfos, nil
+	return
 }
 
 // Readdirnames reads and returns a slice of names from the directory f.

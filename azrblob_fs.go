@@ -34,13 +34,13 @@ type Fs struct {
 	cached     bool
 	ctx        *context.Context
 	serviceURL *azblob.ServiceURL
-	marker     azblob.Marker
 }
 
 // LogError logs any errors encountered
 func LogError(err error) {
 	msg := ""
-	msgFmt := "[ERROR] in %s within %s at line %d due to [%s]"
+	tFmt := "01-02|15:04:05"
+	msgFmt := "AZRBLOB-ERROR[%s] from %s within %s at line %d [%s]"
 	pc, file, line, ok := runtime.Caller(1)
 	if ok {
 		fnc := runtime.FuncForPC(pc)
@@ -48,7 +48,7 @@ func LogError(err error) {
 		if fnc != nil {
 			name = fnc.Name()
 		}
-		msg = fmt.Sprintf(msgFmt, file, name, line, err.Error())
+		msg = fmt.Sprintf(msgFmt, time.Now().Format(tFmt), file, name, line, err.Error())
 	}
 	log.Error(msg)
 	return
@@ -57,7 +57,8 @@ func LogError(err error) {
 // LogDebug logs any debug messages
 func LogDebug(entry string) {
 	msg := ""
-	msgFmt := "[DEBUG] from %s within %s at line %d [%s]"
+	tFmt := "01-02|15:04:05"
+	msgFmt := "AZRBLOB-DEBUG[%s] from %s within %s at line %d [%s]"
 	pc, file, line, ok := runtime.Caller(1)
 	if ok {
 		fnc := runtime.FuncForPC(pc)
@@ -65,7 +66,7 @@ func LogDebug(entry string) {
 		if fnc != nil {
 			name = fnc.Name()
 		}
-		msg = fmt.Sprintf(msgFmt, file, name, line, entry)
+		msg = fmt.Sprintf(msgFmt, time.Now().Format(tFmt), file, name, line, entry)
 	}
 	log.Debug(msg)
 	return
