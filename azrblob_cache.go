@@ -73,7 +73,7 @@ func createContainerCache(container CreateCache) (ContainerCache, error) {
 	}
 
 	if container.Path == "" {
-		container.Path = "/tmp"
+		container.Path = os.TempDir()
 	}
 
 	if container.AccountName == "" {
