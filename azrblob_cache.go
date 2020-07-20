@@ -262,6 +262,10 @@ func (cc *ContainerCache) update() error {
 
 		// Process the blobs returned in this result segment
 		for _, blobInfo := range listBlob.Segment.BlobItems {
+			// exclude archived blobs
+			if blobInfo.Properties.AccessTier == azblob.AccessTierArchive {
+				continue
+			}
 			record := []string{blobInfo.Name, fmt.Sprintf("%d", *blobInfo.Properties.ContentLength), blobInfo.Properties.LastModified.Format(cacheDateFormat)}
 			err = writer.Write(record)
 			if err != nil {

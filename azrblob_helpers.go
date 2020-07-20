@@ -158,14 +158,19 @@ func (f *File) getBlobsInContainerFileInfoMarker(maxResults int32, prefix, filte
 		// 	AccessTierChangeTime      *time.Time        `xml:"AccessTierChangeTime"`
 		// }
 		for _, blobInfo := range listBlob.Segment.BlobItems {
+			// exclude archived blobs
+			if blobInfo.Properties.AccessTier == azblob.AccessTierArchive {
+				continue
+			}
+			// check for filter match if applicable
+			if rexp != nil && !rexp.Match([]byte(blobInfo.Name)) {
+				continue
+			}
 			fi := FileInfo{
 				directory:   false,
 				name:        blobInfo.Name,
 				sizeInBytes: *blobInfo.Properties.ContentLength,
 				modTime:     blobInfo.Properties.LastModified,
-			}
-			if rexp != nil && !rexp.Match([]byte(blobInfo.Name)) {
-				continue
 			}
 			blobs = append(blobs, fi)
 		}

@@ -8,6 +8,7 @@ It provides an [Azure Blob](https://azure.microsoft.com/en-us/services/storage/b
 - 80% coverage (all APIs are tested, but not all errors are reproduced)
 - Containers that have a large enough number of blobs that cause the listing to timeout can be cached
 - Listing with the ? and * wildcards is supported for cached and non-cached containers
+- Archived blobs are excluded from listing in cached and non-cached containers
 
 ## Known limitations
 - File appending is not supported because Azure Blob Storage doesn't support it for Block Blobs.
