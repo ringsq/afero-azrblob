@@ -57,7 +57,7 @@ func main() {
   azrblobFs := azrblob.NewFs(&ctx, &serviceURL, container, true)
 
   // And do your thing
-  file, _ := fs.OpenFile(name, os.O_WRONLY, 0777)
+  file, _ := azrblobFs.OpenFile(name, os.O_WRONLY, 0777)
   file.WriteString("Hello world!")
   file.Close()
 }
