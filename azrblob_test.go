@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"github.com/Azure/azure-storage-blob-go/azblob"
-	env "github.com/magna5/godotenv"
+	env "github.com/ringsq/godotenv"
 	"github.com/spf13/afero"
 )
 
