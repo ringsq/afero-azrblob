@@ -24,7 +24,7 @@ import(
 	"github.com/Azure/azure-storage-blob-go/azblob"
  	"github.com/spf13/afero"
 
-	azrblob "github.com/magna5/afero-azrblob"
+	azrblob "github.com/ringsq/afero-azrblob"
 )
 
 func main() {
