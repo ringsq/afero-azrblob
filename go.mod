@@ -12,6 +12,6 @@ require (
 	github.com/ringsq/godotenv v1.3.1
 	github.com/spf13/afero v1.3.2
 	golang.org/x/net v0.0.0-20200707034311-ab3426394381 // indirect
-	golang.org/x/sys v0.0.0-20200625212154-ddb9806d33ae // indirect
+	golang.org/x/sys v0.1.0 // indirect
 	golang.org/x/text v0.3.3 // indirect
 )
